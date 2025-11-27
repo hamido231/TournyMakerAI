@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
-import { Flag, Copy, UserPlus, Users } from "lucide-react";
+import { Copy, UserPlus, Users } from "lucide-react"; // <--- REMOVED 'Flag'
 
 const TournamentView = () => {
   const { id } = useParams();
@@ -65,6 +65,7 @@ const TournamentView = () => {
 
     try {
       // A. Try to find a REAL user first
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: foundUser } = await supabase
         .from("profiles")
         .select("id, skill_level")
@@ -88,7 +89,10 @@ const TournamentView = () => {
           });
 
         if (createGuestError) {
-          if (createGuestError.message.includes("unique constraint")) {
+          if (
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (createGuestError as any).message?.includes("unique constraint")
+          ) {
             const uniqueGuestId = generateUUID();
             const uniqueName = `${addName}_${Math.floor(Math.random() * 1000)}`;
             await supabase.from("profiles").insert({
