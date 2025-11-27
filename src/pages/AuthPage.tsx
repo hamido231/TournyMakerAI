@@ -2,16 +2,27 @@ import { useState } from "react";
 import { supabase } from "../supabaseClient";
 import { useNavigate } from "react-router-dom";
 
+export const RANK_MAP = [
+  { name: "Bronze", value: 1, color: "text-orange-700" },
+  { name: "Silver", value: 2, color: "text-gray-400" },
+  { name: "Gold", value: 3, color: "text-yellow-400" },
+  { name: "Platinum", value: 4, color: "text-cyan-200" },
+  { name: "Diamond", value: 5, color: "text-cyan-500" },
+  { name: "Champion", value: 6, color: "text-purple-500" },
+  { name: "Grand Champion", value: 7, color: "text-red-500" },
+  { name: "SSL", value: 8, color: "text-white" },
+];
+
 const AuthPage = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-  const [isSignUp, setIsSignUp] = useState(false); // Toggle between Login and Signup
+  const [isSignUp, setIsSignUp] = useState(false);
 
-  // Form Fields
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
   const [rlUsername, setRlUsername] = useState("");
+  const [rank, setRank] = useState("1"); // Default Bronze
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,37 +30,33 @@ const AuthPage = () => {
 
     try {
       if (isSignUp) {
-        // --- SIGN UP LOGIC ---
-        // 1. Create User in Supabase Auth
+        // 1. Sign Up
         const { data, error: authError } = await supabase.auth.signUp({
           email,
           password,
         });
-
         if (authError) throw authError;
 
         if (data.user) {
-          // 2. Create User Profile in the Database
+          // 2. Create Profile with Selected Rank
           const { error: profileError } = await supabase
             .from("profiles")
             .insert({
               id: data.user.id,
               username: username,
               rl_username: rlUsername,
-              skill_level: 1, // Default starting level
+              skill_level: parseInt(rank), // Store as number 1-8
               sub_points: 50,
             });
 
-          if (profileError) {
-            console.error("Profile Error:", profileError);
-            // Optional: Delete the auth user if profile creation fails
-          } else {
-            alert("Account created! You are now logged in.");
+          if (profileError) console.error(profileError);
+          else {
+            alert("Account created! Logging you in...");
             navigate("/dashboard");
           }
         }
       } else {
-        // --- LOGIN LOGIC ---
+        // Login
         const { error } = await supabase.auth.signInWithPassword({
           email,
           password,
@@ -57,24 +64,21 @@ const AuthPage = () => {
         if (error) throw error;
         navigate("/dashboard");
       }
-    } catch (error) {
-      // FIX: We remove ': any' and cast it safely inside
-      const message = (error as Error).message || "An unknown error occurred";
-      alert(message);
+    } catch (error: any) {
+      alert(error.message || "An error occurred");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="flex justify-center items-center h-[80vh]">
+    <div className="flex justify-center items-center min-h-[80vh] py-10">
       <div className="bg-rl-card p-8 rounded-2xl w-full max-w-md border border-slate-700 shadow-2xl">
         <h2 className="text-3xl font-bold mb-6 text-center text-white">
           {isSignUp ? "Join the Arena" : "Pilot Login"}
         </h2>
 
         <form onSubmit={handleAuth} className="space-y-4">
-          {/* Email & Password are always needed */}
           <div>
             <label className="block text-sm text-gray-400 mb-1">Email</label>
             <input
@@ -97,7 +101,6 @@ const AuthPage = () => {
             />
           </div>
 
-          {/* Only show these if Signing Up */}
           {isSignUp && (
             <>
               <div>
@@ -116,7 +119,7 @@ const AuthPage = () => {
 
               <div>
                 <label className="block text-sm text-gray-400 mb-1">
-                  Rocket League ID (Gamertag)
+                  Rocket League ID
                 </label>
                 <input
                   type="text"
@@ -125,6 +128,23 @@ const AuthPage = () => {
                   value={rlUsername}
                   onChange={(e) => setRlUsername(e.target.value)}
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm text-rl-accent mb-1 font-bold">
+                  Current Rank
+                </label>
+                <select
+                  className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white outline-none focus:border-rl-accent"
+                  value={rank}
+                  onChange={(e) => setRank(e.target.value)}
+                >
+                  {RANK_MAP.map((r) => (
+                    <option key={r.value} value={r.value}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
               </div>
             </>
           )}
@@ -151,5 +171,4 @@ const AuthPage = () => {
     </div>
   );
 };
-
 export default AuthPage;
