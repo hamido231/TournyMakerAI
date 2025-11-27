@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
-import { Copy, UserPlus, Users, PlayCircle } from "lucide-react";
+import { Copy, UserPlus, Users, PlayCircle, Trophy } from "lucide-react";
 import { RANK_MAP } from "./AuthPage";
 
 const TournamentView = () => {
@@ -16,19 +16,13 @@ const TournamentView = () => {
 
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
-
-  // Manual Add State
   const [addName, setAddName] = useState("");
   const [guestRank, setGuestRank] = useState("1");
   const [addLoading, setAddLoading] = useState(false);
 
-  // Helper: Get Rank Name from number
-  const getRankName = (lvl: number) => {
-    const r = RANK_MAP.find((x) => x.value === lvl);
-    return r ? r.name : "Unranked";
-  };
+  const getRankName = (lvl: number) =>
+    RANK_MAP.find((x) => x.value === lvl)?.name || "Unranked";
 
-  // Helper: UUID Generator
   const generateUUID = () => {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
       /[xy]/g,
@@ -40,17 +34,13 @@ const TournamentView = () => {
     );
   };
 
-  // --- DATA FETCHING ---
   const fetchData = async () => {
     if (!id) return;
-
-    // 1. User
     const {
       data: { user },
     } = await supabase.auth.getUser();
     setCurrentUser(user?.id || null);
 
-    // 2. Tournament
     const { data: tData } = await supabase
       .from("tournaments")
       .select("*")
@@ -58,7 +48,6 @@ const TournamentView = () => {
       .single();
     if (tData) setTournament(tData);
 
-    // 3. Participants
     const { data: pData } = await supabase
       .from("participants")
       .select(
@@ -67,7 +56,6 @@ const TournamentView = () => {
       .eq("tournament_id", id);
     if (pData) setParticipants(pData);
 
-    // 4. Matches
     const { data: mData } = await supabase
       .from("matches")
       .select("*, p1:player1_id(username), p2:player2_id(username)")
@@ -80,21 +68,12 @@ const TournamentView = () => {
 
   useEffect(() => {
     fetchData();
-
-    // --- REALTIME SUBSCRIPTION ---
     const channel = supabase
       .channel("room1")
       .on(
         "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "participants",
-          filter: `tournament_id=eq.${id}`,
-        },
-        () => {
-          fetchData();
-        }
+        { event: "*", schema: "public", filter: `tournament_id=eq.${id}` },
+        () => fetchData()
       )
       .on(
         "postgres_changes",
@@ -104,36 +83,18 @@ const TournamentView = () => {
           table: "tournaments",
           filter: `id=eq.${id}`,
         },
-        () => {
-          fetchData();
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "matches",
-          filter: `tournament_id=eq.${id}`,
-        },
-        () => {
-          fetchData();
-        }
+        () => fetchData()
       )
       .subscribe();
-
     return () => {
       supabase.removeChannel(channel);
     };
   }, [id]);
 
-  // --- ACTIONS ---
-
   const handleManualAdd = async () => {
     if (!addName) return;
     setAddLoading(true);
     try {
-      // 1. Find User or Create Guest
       const { data: foundUser } = await supabase
         .from("profiles")
         .select("id")
@@ -152,13 +113,10 @@ const TournamentView = () => {
           sub_points: 50,
         });
       }
-
-      // 2. Add to Tournament
       await supabase
         .from("participants")
         .insert({ tournament_id: id, player_id: playerId });
       setAddName("");
-
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       if (!error.message?.includes("duplicate"))
@@ -170,18 +128,13 @@ const TournamentView = () => {
 
   const startTournament = async () => {
     if (participants.length < 2) return alert("Need at least 2 players!");
-    const confirmStart = window.confirm(
-      "Start tournament? No more players can join."
-    );
-    if (!confirmStart) return;
+    if (!window.confirm("Start tournament? No more players can join.")) return;
 
-    // 1. Update Status
     await supabase
       .from("tournaments")
       .update({ status: "active" })
       .eq("id", id);
 
-    // 2. Generate Pairs (Shuffle -> Pair)
     const shuffled = [...participants].sort(() => 0.5 - Math.random());
     const newMatches = [];
 
@@ -197,21 +150,16 @@ const TournamentView = () => {
       });
     }
 
-    // Handle odd player
-    if (shuffled.length === 1) {
+    if (shuffled.length === 1)
       alert(
-        `Odd number of players! ${shuffled[0].profiles.username} sits out this round.`
+        `Odd number of players! ${shuffled[0].profiles.username} sits out.`
       );
-    }
 
-    // 3. Insert Matches
     if (newMatches.length > 0) {
       const { error } = await supabase.from("matches").insert(newMatches);
       if (error) alert("Error creating bracket: " + error.message);
     }
   };
-
-  // --- RENDER ---
 
   if (loading)
     return (
@@ -271,8 +219,8 @@ const TournamentView = () => {
         )}
       </div>
 
-      <div className="grid md:grid-cols-3 gap-8">
-        {/* LEFT: ROSTER & TOOLS */}
+      <div className="grid md:grid-cols-4 gap-8">
+        {/* LEFT COLUMN: ROSTER */}
         <div className="md:col-span-1 space-y-6">
           {isAdmin && tournament.status === "open" && (
             <div className="bg-slate-800/50 p-4 rounded-xl border border-rl-accent/50">
@@ -288,13 +236,13 @@ const TournamentView = () => {
                     onChange={(e) => setAddName(e.target.value)}
                   />
                   <select
-                    className="bg-slate-900 w-24 p-2 text-sm border border-slate-600 rounded text-white outline-none"
+                    className="bg-slate-900 w-16 p-2 text-sm border border-slate-600 rounded text-white outline-none"
                     value={guestRank}
                     onChange={(e) => setGuestRank(e.target.value)}
                   >
                     {RANK_MAP.map((r) => (
                       <option key={r.value} value={r.value}>
-                        {r.name}
+                        {r.value}
                       </option>
                     ))}
                   </select>
@@ -304,7 +252,7 @@ const TournamentView = () => {
                   disabled={addLoading}
                   className="bg-rl-accent hover:bg-orange-600 py-2 rounded font-bold text-white w-full transition"
                 >
-                  {addLoading ? "Adding..." : "+ Add Player"}
+                  {addLoading ? "..." : "+"}
                 </button>
               </div>
             </div>
@@ -323,7 +271,7 @@ const TournamentView = () => {
                 participants.map((p: any) => (
                   <div
                     key={p.player_id}
-                    className="bg-slate-900 p-3 rounded flex justify-between items-center border border-slate-800"
+                    className="bg-slate-900 p-2 rounded flex justify-between items-center border border-slate-800"
                   >
                     <div>
                       <div className="font-bold text-sm flex items-center gap-2">
@@ -334,12 +282,9 @@ const TournamentView = () => {
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-rl-primary">
-                        {p.profiles?.rl_username}
+                      <div className="text-[10px] text-gray-400">
+                        {getRankName(p.profiles?.skill_level)}
                       </div>
-                    </div>
-                    <div className="text-xs font-bold text-gray-400">
-                      {getRankName(p.profiles?.skill_level)}
                     </div>
                   </div>
                 ))
@@ -348,14 +293,15 @@ const TournamentView = () => {
           </div>
         </div>
 
-        {/* RIGHT: BRACKET / START */}
-        <div className="md:col-span-2">
-          <h2 className="text-2xl font-bold border-l-4 border-rl-accent pl-4 mb-4">
-            Arena Status
+        {/* RIGHT COLUMNS: BRACKET */}
+        <div className="md:col-span-3">
+          <h2 className="text-2xl font-bold border-l-4 border-rl-accent pl-4 mb-6">
+            Tournament Bracket
           </h2>
 
           {tournament.status === "open" ? (
             <div className="bg-slate-900/50 border border-dashed border-slate-700 rounded-xl p-12 text-center h-[400px] flex flex-col justify-center items-center">
+              <Trophy size={48} className="text-slate-700 mb-4" />
               <p className="text-xl text-gray-400 mb-4">
                 {participants.length < 2
                   ? "Waiting for players..."
@@ -376,30 +322,67 @@ const TournamentView = () => {
               )}
             </div>
           ) : (
-            <div className="space-y-4">
-              {matches.length === 0 ? (
-                <div className="text-center p-10">Generating Bracket...</div>
-              ) : (
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                matches.map((match: any) => (
-                  <div
-                    key={match.id}
-                    className="bg-rl-card border border-slate-700 p-4 rounded-xl flex flex-col md:flex-row justify-between items-center"
-                  >
-                    <div className="text-lg font-bold w-1/3 text-center md:text-left text-rl-primary">
-                      {match.p1?.username || "Bye"}
-                    </div>
-                    <div className="bg-slate-900 px-4 py-2 rounded text-sm font-bold text-gray-400">
-                      VS
-                    </div>
-                    <div className="text-lg font-bold w-1/3 text-center md:text-right text-rl-accent">
-                      {match.p2?.username || "Bye"}
-                    </div>
+            <div className="flex gap-8 overflow-x-auto pb-4">
+              {/* ROUND 1 COLUMN */}
+              <div className="min-w-[300px]">
+                <h3 className="text-rl-primary font-bold mb-4 uppercase tracking-wider text-sm">
+                  Round 1
+                </h3>
+                <div className="space-y-6">
+                  {matches.length === 0 ? (
+                    <div className="text-gray-500">Generating...</div>
+                  ) : (
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    matches.map((match: any) => (
+                      <div
+                        key={match.id}
+                        className="bg-slate-800 border border-slate-600 rounded-lg overflow-hidden relative"
+                      >
+                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-rl-primary"></div>
+
+                        {/* Player 1 */}
+                        <div className="flex justify-between items-center p-3 border-b border-slate-700 bg-slate-900/50">
+                          <span className="font-bold text-blue-400">
+                            {match.p1?.username || "Bye"}
+                          </span>
+                          <span className="bg-black/50 px-2 rounded text-sm">
+                            0
+                          </span>
+                        </div>
+
+                        {/* Player 2 */}
+                        <div className="flex justify-between items-center p-3 bg-slate-900/50">
+                          <span className="font-bold text-orange-400">
+                            {match.p2?.username || "Bye"}
+                          </span>
+                          <span className="bg-black/50 px-2 rounded text-sm">
+                            0
+                          </span>
+                        </div>
+
+                        {isAdmin && (
+                          <div className="p-2 bg-slate-950 text-center">
+                            <button className="text-xs text-gray-400 hover:text-white uppercase font-bold tracking-wider">
+                              Update Score
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Placeholder for Next Rounds */}
+              <div className="min-w-[300px] opacity-50">
+                <h3 className="text-gray-500 font-bold mb-4 uppercase tracking-wider text-sm">
+                  Semi Finals
+                </h3>
+                <div className="space-y-12 mt-8">
+                  <div className="bg-slate-800/50 border border-dashed border-slate-700 h-24 rounded-lg flex items-center justify-center text-xs text-gray-600">
+                    Winner of Match 1 vs Match 2
                   </div>
-                ))
-              )}
-              <div className="mt-8 text-center text-gray-500 italic">
-                Score reporting coming in Phase 2
+                </div>
               </div>
             </div>
           )}
