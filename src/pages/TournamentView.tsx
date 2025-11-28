@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
-import { Copy, UserPlus, Users, PlayCircle, Trophy } from "lucide-react";
+import {
+  Copy,
+  UserPlus,
+  Users,
+  PlayCircle,
+  Trophy,
+  Trash2,
+} from "lucide-react";
 import { RANK_MAP } from "./AuthPage";
 
 const TournamentView = () => {
@@ -20,8 +27,11 @@ const TournamentView = () => {
   const [guestRank, setGuestRank] = useState("1");
   const [addLoading, setAddLoading] = useState(false);
 
+  // Helper: Get Rank Name
   const getRankName = (lvl: number) =>
     RANK_MAP.find((x) => x.value === lvl)?.name || "Unranked";
+  const getRankColor = (lvl: number) =>
+    RANK_MAP.find((x) => x.value === lvl)?.color || "text-gray-500";
 
   const generateUUID = () => {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
@@ -91,6 +101,8 @@ const TournamentView = () => {
     };
   }, [id]);
 
+  // --- ACTIONS ---
+
   const handleManualAdd = async () => {
     if (!addName) return;
     setAddLoading(true);
@@ -126,15 +138,28 @@ const TournamentView = () => {
     }
   };
 
+  const handleRemovePlayer = async (playerId: string) => {
+    if (!window.confirm("Remove this player?")) return;
+    await supabase
+      .from("participants")
+      .delete()
+      .eq("player_id", playerId)
+      .eq("tournament_id", id);
+    fetchData();
+  };
+
   const startTournament = async () => {
     if (participants.length < 2) return alert("Need at least 2 players!");
-    if (!window.confirm("Start tournament? No more players can join.")) return;
+    if (!window.confirm("Start tournament? This will lock the bracket."))
+      return;
 
+    // 1. Update Status
     await supabase
       .from("tournaments")
       .update({ status: "active" })
       .eq("id", id);
 
+    // 2. Generate Pairs
     const shuffled = [...participants].sort(() => 0.5 - Math.random());
     const newMatches = [];
 
@@ -150,15 +175,13 @@ const TournamentView = () => {
       });
     }
 
-    if (shuffled.length === 1)
-      alert(
-        `Odd number of players! ${shuffled[0].profiles.username} sits out.`
-      );
-
+    // 3. Create Matches in DB
     if (newMatches.length > 0) {
-      const { error } = await supabase.from("matches").insert(newMatches);
-      if (error) alert("Error creating bracket: " + error.message);
+      await supabase.from("matches").insert(newMatches);
     }
+
+    // Force refresh to switch view immediately
+    fetchData();
   };
 
   if (loading)
@@ -221,6 +244,7 @@ const TournamentView = () => {
 
       <div className="grid md:grid-cols-4 gap-8">
         {/* LEFT COLUMN: ROSTER */}
+        {/* Only show Roster on Left if Tournament is Open. If Active, bracket takes full width usually, but we keep it side by side for Phase 1 */}
         <div className="md:col-span-1 space-y-6">
           {isAdmin && tournament.status === "open" && (
             <div className="bg-slate-800/50 p-4 rounded-xl border border-rl-accent/50">
@@ -231,18 +255,18 @@ const TournamentView = () => {
                 <div className="flex gap-2">
                   <input
                     className="bg-slate-900 flex-1 p-2 text-sm border border-slate-600 rounded text-white outline-none"
-                    placeholder="Username / Guest"
+                    placeholder="Name"
                     value={addName}
                     onChange={(e) => setAddName(e.target.value)}
                   />
                   <select
-                    className="bg-slate-900 w-16 p-2 text-sm border border-slate-600 rounded text-white outline-none"
+                    className="bg-slate-900 w-24 p-2 text-sm border border-slate-600 rounded text-white outline-none"
                     value={guestRank}
                     onChange={(e) => setGuestRank(e.target.value)}
                   >
                     {RANK_MAP.map((r) => (
                       <option key={r.value} value={r.value}>
-                        {r.value}
+                        {r.name}
                       </option>
                     ))}
                   </select>
@@ -252,7 +276,7 @@ const TournamentView = () => {
                   disabled={addLoading}
                   className="bg-rl-accent hover:bg-orange-600 py-2 rounded font-bold text-white w-full transition"
                 >
-                  {addLoading ? "..." : "+"}
+                  {addLoading ? "..." : "+ Add"}
                 </button>
               </div>
             </div>
@@ -271,7 +295,7 @@ const TournamentView = () => {
                 participants.map((p: any) => (
                   <div
                     key={p.player_id}
-                    className="bg-slate-900 p-2 rounded flex justify-between items-center border border-slate-800"
+                    className="bg-slate-900 p-2 rounded flex justify-between items-center border border-slate-800 group"
                   >
                     <div>
                       <div className="font-bold text-sm flex items-center gap-2">
@@ -282,10 +306,22 @@ const TournamentView = () => {
                           </span>
                         )}
                       </div>
-                      <div className="text-[10px] text-gray-400">
+                      <div
+                        className={`text-[10px] font-bold ${getRankColor(
+                          p.profiles?.skill_level
+                        )}`}
+                      >
                         {getRankName(p.profiles?.skill_level)}
                       </div>
                     </div>
+                    {isAdmin && tournament.status === "open" && (
+                      <button
+                        onClick={() => handleRemovePlayer(p.player_id)}
+                        className="text-slate-600 hover:text-red-500 transition"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
                   </div>
                 ))
               )}
@@ -293,7 +329,7 @@ const TournamentView = () => {
           </div>
         </div>
 
-        {/* RIGHT COLUMNS: BRACKET */}
+        {/* RIGHT COLUMNS: BRACKET AREA */}
         <div className="md:col-span-3">
           <h2 className="text-2xl font-bold border-l-4 border-rl-accent pl-4 mb-6">
             Tournament Bracket
@@ -325,45 +361,56 @@ const TournamentView = () => {
             <div className="flex gap-8 overflow-x-auto pb-4">
               {/* ROUND 1 COLUMN */}
               <div className="min-w-[300px]">
-                <h3 className="text-rl-primary font-bold mb-4 uppercase tracking-wider text-sm">
-                  Round 1
-                </h3>
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="bg-rl-primary h-2 w-2 rounded-full"></div>
+                  <h3 className="text-white font-bold uppercase tracking-wider text-sm">
+                    Round 1
+                  </h3>
+                </div>
+
                 <div className="space-y-6">
                   {matches.length === 0 ? (
-                    <div className="text-gray-500">Generating...</div>
+                    <div className="text-gray-500">Generating Bracket...</div>
                   ) : (
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     matches.map((match: any) => (
                       <div
                         key={match.id}
-                        className="bg-slate-800 border border-slate-600 rounded-lg overflow-hidden relative"
+                        className="bg-slate-800 border border-slate-600 rounded-lg overflow-hidden relative shadow-lg"
                       >
-                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-rl-primary"></div>
+                        {/* Left Accent Bar */}
+                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-rl-primary to-rl-accent"></div>
 
-                        {/* Player 1 */}
-                        <div className="flex justify-between items-center p-3 border-b border-slate-700 bg-slate-900/50">
-                          <span className="font-bold text-blue-400">
+                        {/* Player 1 Row */}
+                        <div className="flex justify-between items-center p-3 border-b border-slate-700 bg-slate-900/40">
+                          <span className="font-bold text-gray-200">
                             {match.p1?.username || "Bye"}
                           </span>
-                          <span className="bg-black/50 px-2 rounded text-sm">
-                            0
-                          </span>
+                          <input
+                            type="number"
+                            disabled={!isAdmin}
+                            className="bg-black/50 w-8 text-center rounded text-sm text-white"
+                            placeholder="-"
+                          />
                         </div>
 
-                        {/* Player 2 */}
-                        <div className="flex justify-between items-center p-3 bg-slate-900/50">
-                          <span className="font-bold text-orange-400">
+                        {/* Player 2 Row */}
+                        <div className="flex justify-between items-center p-3 bg-slate-900/40">
+                          <span className="font-bold text-gray-200">
                             {match.p2?.username || "Bye"}
                           </span>
-                          <span className="bg-black/50 px-2 rounded text-sm">
-                            0
-                          </span>
+                          <input
+                            type="number"
+                            disabled={!isAdmin}
+                            className="bg-black/50 w-8 text-center rounded text-sm text-white"
+                            placeholder="-"
+                          />
                         </div>
 
                         {isAdmin && (
-                          <div className="p-2 bg-slate-950 text-center">
-                            <button className="text-xs text-gray-400 hover:text-white uppercase font-bold tracking-wider">
-                              Update Score
+                          <div className="bg-slate-950 p-1 flex justify-center">
+                            <button className="text-[10px] uppercase font-bold text-green-500 hover:text-green-400">
+                              Save Score
                             </button>
                           </div>
                         )}
@@ -373,14 +420,17 @@ const TournamentView = () => {
                 </div>
               </div>
 
-              {/* Placeholder for Next Rounds */}
-              <div className="min-w-[300px] opacity-50">
-                <h3 className="text-gray-500 font-bold mb-4 uppercase tracking-wider text-sm">
-                  Semi Finals
-                </h3>
-                <div className="space-y-12 mt-8">
+              {/* Placeholder: ROUND 2 */}
+              <div className="min-w-[300px] opacity-40">
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="bg-gray-600 h-2 w-2 rounded-full"></div>
+                  <h3 className="text-gray-400 font-bold uppercase tracking-wider text-sm">
+                    Semi Finals
+                  </h3>
+                </div>
+                <div className="space-y-12 mt-8 px-4 border-l-2 border-slate-700 h-full">
                   <div className="bg-slate-800/50 border border-dashed border-slate-700 h-24 rounded-lg flex items-center justify-center text-xs text-gray-600">
-                    Winner of Match 1 vs Match 2
+                    Winner 1 vs Winner 2
                   </div>
                 </div>
               </div>
