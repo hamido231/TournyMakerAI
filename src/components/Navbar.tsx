@@ -1,23 +1,40 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../supabaseClient";
+import { User } from "@supabase/supabase-js";
 
 const Navbar = () => {
+  const [user, setUser] = useState<User | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [user, setUser] = useState<any>(null);
+  const [profile, setProfile] = useState<any>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Check active session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-    });
+    const getData = async () => {
+      // 1. Get Auth User
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      setUser(user);
 
-    // Listen for changes (login/logout)
+      // 2. Get Profile Data (Username)
+      if (user) {
+        const { data } = await supabase
+          .from("profiles")
+          .select("username, avatar_url")
+          .eq("id", user.id)
+          .single();
+        setProfile(data);
+      }
+    };
+
+    getData();
+
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
+      if (session?.user) getData(); // Refetch profile on login
     });
 
     return () => subscription.unsubscribe();
@@ -42,8 +59,27 @@ const Navbar = () => {
         <div className="flex gap-4 items-center">
           {user ? (
             <>
-              <Link to="/dashboard" className="text-gray-300 hover:text-white">
-                Dashboard
+              <Link
+                to="/dashboard"
+                className="flex items-center gap-3 hover:bg-slate-800 px-3 py-1 rounded transition"
+              >
+                <div className="text-right hidden md:block">
+                  <div className="text-sm font-bold text-white">
+                    {profile?.username || "Pilot"}
+                  </div>
+                  <div className="text-[10px] text-rl-primary uppercase tracking-wider">
+                    Online
+                  </div>
+                </div>
+                <div className="w-8 h-8 bg-slate-700 rounded-full overflow-hidden border border-rl-primary">
+                  <img
+                    src={
+                      profile?.avatar_url ||
+                      `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile?.username}`
+                    }
+                    alt="avatar"
+                  />
+                </div>
               </Link>
               <button
                 onClick={handleLogout}
