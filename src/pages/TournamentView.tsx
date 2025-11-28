@@ -25,8 +25,9 @@ const TournamentView = () => {
   const [addName, setAddName] = useState("");
   const [guestRank, setGuestRank] = useState("1");
   const [addLoading, setAddLoading] = useState(false);
+  const [savingScoreId, setSavingScoreId] = useState<string | null>(null);
 
-  // Local state for score inputs: { match_id: { p1: 2, p2: 1 } }
+  // Local state for score inputs: { match_id: { p1: "2", p2: "1" } }
   const [scoreInputs, setScoreInputs] = useState<
     Record<string, { p1: string; p2: string }>
   >({});
@@ -155,13 +156,11 @@ const TournamentView = () => {
     if (!window.confirm("Start tournament? This will lock the bracket."))
       return;
 
-    // 1. Update Status
     await supabase
       .from("tournaments")
       .update({ status: "active" })
       .eq("id", id);
 
-    // 2. Generate Pairs
     const shuffled = [...participants].sort(() => 0.5 - Math.random());
     const newMatches = [];
 
@@ -176,7 +175,6 @@ const TournamentView = () => {
         status: "pending",
       });
     }
-    // If odd, one gets a bye (not handled in phase 1, just omitted)
 
     if (newMatches.length > 0) {
       await supabase.from("matches").insert(newMatches);
@@ -205,18 +203,32 @@ const TournamentView = () => {
 
   const saveScore = async (match: any) => {
     const inputs = scoreInputs[match.id];
-    if (!inputs || inputs.p1 === "" || inputs.p2 === "")
-      return alert("Please enter both scores");
+
+    // 1. Validation
+    if (
+      !inputs ||
+      inputs.p1 === undefined ||
+      inputs.p2 === undefined ||
+      inputs.p1 === "" ||
+      inputs.p2 === ""
+    ) {
+      return alert("Please enter a score for BOTH players.");
+    }
 
     const s1 = parseInt(inputs.p1);
     const s2 = parseInt(inputs.p2);
 
-    if (s1 === s2)
-      return alert("Draws not allowed in Rocket League! Play overtime.");
+    if (isNaN(s1) || isNaN(s2)) return alert("Scores must be numbers.");
+    if (s1 === s2) return alert("Draws are not allowed! Play Overtime.");
 
+    setSavingScoreId(match.id); // Show loading state on button
+
+    // 2. Determine Winner
     const winnerId = s1 > s2 ? match.player1_id : match.player2_id;
 
-    // 1. Update the Match in DB
+    console.log("Saving Score:", { matchId: match.id, s1, s2, winnerId });
+
+    // 3. Update Database
     const { error } = await supabase
       .from("matches")
       .update({
@@ -227,51 +239,61 @@ const TournamentView = () => {
       })
       .eq("id", match.id);
 
-    if (error) return alert("Error saving: " + error.message);
+    if (error) {
+      console.error("DB Error:", error);
+      alert("Failed to save: " + error.message);
+      setSavingScoreId(null);
+      return;
+    }
 
-    // 2. Check if we need to generate Next Round
-    // We do this by checking if ANY matches in this round are still pending
-    const currentRound = match.round;
+    // 4. Check for Next Round
+    await checkForNextRound(match.round);
 
-    // Fetch all matches of this round again to be safe
+    setSavingScoreId(null);
+    // Data will refresh automatically via Realtime, but we fetch just in case
+    fetchData();
+  };
+
+  const checkForNextRound = async (currentRound: number) => {
+    // Check if ALL matches in this round are done
     const { data: roundMatches } = await supabase
       .from("matches")
-      .select("status, winner_id")
+      .select("status")
       .eq("tournament_id", id)
       .eq("round", currentRound);
 
     const allComplete = roundMatches?.every((m) => m.status === "completed");
 
-    if (allComplete && roundMatches && roundMatches.length > 1) {
-      // Generate Next Round!
-      await generateNextRound(currentRound);
-    } else if (allComplete && roundMatches?.length === 1) {
-      // Tournament Over
-      await supabase
-        .from("tournaments")
-        .update({ status: "completed" })
-        .eq("id", id);
-      alert("Tournament Complete! Winner Declared.");
-    } else {
-      // Just refresh to show the green winner checkmark
-      fetchData();
+    if (allComplete && roundMatches && roundMatches.length > 0) {
+      if (roundMatches.length === 1) {
+        // Final match finished!
+        await supabase
+          .from("tournaments")
+          .update({ status: "completed" })
+          .eq("id", id);
+        alert("🏆 TOURNAMENT COMPLETE! 🏆");
+      } else {
+        // Generate next round
+        await generateNextRound(currentRound);
+      }
     }
   };
 
   const generateNextRound = async (prevRound: number) => {
-    // 1. Get all winners from previous round
+    // Get winners
     const { data: winners } = await supabase
       .from("matches")
       .select("winner_id")
       .eq("tournament_id", id)
-      .eq("round", prevRound);
+      .eq("round", prevRound)
+      .order("id"); // Important: Keep order consistent for bracket flow
 
     if (!winners) return;
 
     const winnerIds = winners.map((w) => w.winner_id);
     const newMatches = [];
 
-    // Pair them up
+    // Create new pairs
     while (winnerIds.length >= 2) {
       const p1 = winnerIds.shift();
       const p2 = winnerIds.shift();
@@ -286,9 +308,10 @@ const TournamentView = () => {
 
     if (newMatches.length > 0) {
       await supabase.from("matches").insert(newMatches);
-      alert(`Round ${prevRound} complete! Round ${prevRound + 1} generated.`);
     }
   };
+
+  // --- RENDER ---
 
   if (loading)
     return (
@@ -305,7 +328,7 @@ const TournamentView = () => {
 
   const isAdmin = currentUser === tournament.host_id;
 
-  // Group matches by round for display
+  // Group matches by round
   const rounds = matches.reduce((acc: any, match) => {
     if (!acc[match.round]) acc[match.round] = [];
     acc[match.round].push(match);
@@ -524,8 +547,8 @@ const TournamentView = () => {
                               type="number"
                               min="0"
                               disabled={!isAdmin}
-                              className="bg-black/50 w-12 text-center rounded text-sm text-white p-1"
-                              placeholder="-"
+                              className="bg-black/50 w-12 text-center rounded text-sm text-white p-1 outline-none focus:bg-black"
+                              placeholder="0"
                               value={scoreInputs[match.id]?.p1 ?? ""}
                               onChange={(e) =>
                                 handleScoreChange(
@@ -564,8 +587,8 @@ const TournamentView = () => {
                               type="number"
                               min="0"
                               disabled={!isAdmin}
-                              className="bg-black/50 w-12 text-center rounded text-sm text-white p-1"
-                              placeholder="-"
+                              className="bg-black/50 w-12 text-center rounded text-sm text-white p-1 outline-none focus:bg-black"
+                              placeholder="0"
                               value={scoreInputs[match.id]?.p2 ?? ""}
                               onChange={(e) =>
                                 handleScoreChange(
@@ -583,9 +606,16 @@ const TournamentView = () => {
                           <div className="bg-slate-950 p-2 flex justify-center">
                             <button
                               onClick={() => saveScore(match)}
+                              disabled={savingScoreId === match.id}
                               className="flex items-center gap-1 text-[10px] uppercase font-bold text-green-500 hover:text-green-400 transition"
                             >
-                              <Save size={12} /> Save & End Match
+                              {savingScoreId === match.id ? (
+                                "Saving..."
+                              ) : (
+                                <>
+                                  <Save size={12} /> Save Score
+                                </>
+                              )}
                             </button>
                           </div>
                         )}
@@ -594,15 +624,6 @@ const TournamentView = () => {
                   </div>
                 </div>
               ))}
-
-              {/* Placeholder for Next Round if not generated yet */}
-              {tournament.status !== "completed" && (
-                <div className="min-w-[300px] opacity-30 flex items-center justify-center border-l-2 border-slate-800">
-                  <div className="text-gray-500 uppercase font-bold tracking-widest -rotate-90">
-                    Next Round Pending
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
