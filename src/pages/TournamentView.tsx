@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
@@ -8,17 +9,15 @@ import {
   PlayCircle,
   Trophy,
   Trash2,
+  Save,
 } from "lucide-react";
 import { RANK_MAP } from "./AuthPage";
 
 const TournamentView = () => {
   const { id } = useParams();
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [tournament, setTournament] = useState<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [participants, setParticipants] = useState<any[]>([]);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [matches, setMatches] = useState<any[]>([]);
 
   const [loading, setLoading] = useState(true);
@@ -27,7 +26,11 @@ const TournamentView = () => {
   const [guestRank, setGuestRank] = useState("1");
   const [addLoading, setAddLoading] = useState(false);
 
-  // Helper: Get Rank Name
+  // Local state for score inputs: { match_id: { p1: 2, p2: 1 } }
+  const [scoreInputs, setScoreInputs] = useState<
+    Record<string, { p1: string; p2: string }>
+  >({});
+
   const getRankName = (lvl: number) =>
     RANK_MAP.find((x) => x.value === lvl)?.name || "Unranked";
   const getRankColor = (lvl: number) =>
@@ -129,7 +132,6 @@ const TournamentView = () => {
         .from("participants")
         .insert({ tournament_id: id, player_id: playerId });
       setAddName("");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       if (!error.message?.includes("duplicate"))
         alert("Error: " + error.message);
@@ -174,14 +176,118 @@ const TournamentView = () => {
         status: "pending",
       });
     }
+    // If odd, one gets a bye (not handled in phase 1, just omitted)
 
-    // 3. Create Matches in DB
     if (newMatches.length > 0) {
       await supabase.from("matches").insert(newMatches);
     }
-
-    // Force refresh to switch view immediately
     fetchData();
+  };
+
+  // --- SCORE LOGIC ---
+
+  const handleScoreChange = (
+    matchId: string,
+    player: "p1" | "p2",
+    value: string
+  ) => {
+    // Prevent negative numbers
+    if (parseInt(value) < 0) return;
+
+    setScoreInputs((prev) => ({
+      ...prev,
+      [matchId]: {
+        ...prev[matchId],
+        [player]: value,
+      },
+    }));
+  };
+
+  const saveScore = async (match: any) => {
+    const inputs = scoreInputs[match.id];
+    if (!inputs || inputs.p1 === "" || inputs.p2 === "")
+      return alert("Please enter both scores");
+
+    const s1 = parseInt(inputs.p1);
+    const s2 = parseInt(inputs.p2);
+
+    if (s1 === s2)
+      return alert("Draws not allowed in Rocket League! Play overtime.");
+
+    const winnerId = s1 > s2 ? match.player1_id : match.player2_id;
+
+    // 1. Update the Match in DB
+    const { error } = await supabase
+      .from("matches")
+      .update({
+        score_p1: s1,
+        score_p2: s2,
+        winner_id: winnerId,
+        status: "completed",
+      })
+      .eq("id", match.id);
+
+    if (error) return alert("Error saving: " + error.message);
+
+    // 2. Check if we need to generate Next Round
+    // We do this by checking if ANY matches in this round are still pending
+    const currentRound = match.round;
+
+    // Fetch all matches of this round again to be safe
+    const { data: roundMatches } = await supabase
+      .from("matches")
+      .select("status, winner_id")
+      .eq("tournament_id", id)
+      .eq("round", currentRound);
+
+    const allComplete = roundMatches?.every((m) => m.status === "completed");
+
+    if (allComplete && roundMatches && roundMatches.length > 1) {
+      // Generate Next Round!
+      await generateNextRound(currentRound);
+    } else if (allComplete && roundMatches?.length === 1) {
+      // Tournament Over
+      await supabase
+        .from("tournaments")
+        .update({ status: "completed" })
+        .eq("id", id);
+      alert("Tournament Complete! Winner Declared.");
+    } else {
+      // Just refresh to show the green winner checkmark
+      fetchData();
+    }
+  };
+
+  const generateNextRound = async (prevRound: number) => {
+    // 1. Get all winners from previous round
+    const { data: winners } = await supabase
+      .from("matches")
+      .select("winner_id")
+      .eq("tournament_id", id)
+      .eq("round", prevRound);
+
+    if (!winners) return;
+
+    const winnerIds = winners.map((w) => w.winner_id);
+    const newMatches = [];
+
+    // Pair them up
+    while (winnerIds.length >= 2) {
+      const p1 = winnerIds.shift();
+      const p2 = winnerIds.shift();
+      newMatches.push({
+        tournament_id: id,
+        player1_id: p1,
+        player2_id: p2,
+        round: prevRound + 1,
+        status: "pending",
+      });
+    }
+
+    if (newMatches.length > 0) {
+      await supabase.from("matches").insert(newMatches);
+      alert(`Round ${prevRound} complete! Round ${prevRound + 1} generated.`);
+    }
   };
 
   if (loading)
@@ -199,6 +305,13 @@ const TournamentView = () => {
 
   const isAdmin = currentUser === tournament.host_id;
 
+  // Group matches by round for display
+  const rounds = matches.reduce((acc: any, match) => {
+    if (!acc[match.round]) acc[match.round] = [];
+    acc[match.round].push(match);
+    return acc;
+  }, {});
+
   return (
     <div className="container mx-auto px-4 py-8">
       {/* Header */}
@@ -209,7 +322,9 @@ const TournamentView = () => {
               className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${
                 tournament.status === "open"
                   ? "bg-green-500/20 text-green-400"
-                  : "bg-rl-accent/20 text-rl-accent"
+                  : tournament.status === "active"
+                  ? "bg-rl-accent/20 text-rl-accent"
+                  : "bg-purple-500/20 text-purple-400"
               }`}
             >
               {tournament.status}
@@ -243,8 +358,7 @@ const TournamentView = () => {
       </div>
 
       <div className="grid md:grid-cols-4 gap-8">
-        {/* LEFT COLUMN: ROSTER */}
-        {/* Only show Roster on Left if Tournament is Open. If Active, bracket takes full width usually, but we keep it side by side for Phase 1 */}
+        {/* LEFT COLUMN: ROSTER (Hidden if active to give bracket space, or keep small) */}
         <div className="md:col-span-1 space-y-6">
           {isAdmin && tournament.status === "open" && (
             <div className="bg-slate-800/50 p-4 rounded-xl border border-rl-accent/50">
@@ -291,7 +405,6 @@ const TournamentView = () => {
               {participants.length === 0 ? (
                 <p className="text-gray-500 italic">Empty lobby...</p>
               ) : (
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 participants.map((p: any) => (
                   <div
                     key={p.player_id}
@@ -330,7 +443,7 @@ const TournamentView = () => {
         </div>
 
         {/* RIGHT COLUMNS: BRACKET AREA */}
-        <div className="md:col-span-3">
+        <div className="md:col-span-3 overflow-x-auto">
           <h2 className="text-2xl font-bold border-l-4 border-rl-accent pl-4 mb-6">
             Tournament Bracket
           </h2>
@@ -358,82 +471,138 @@ const TournamentView = () => {
               )}
             </div>
           ) : (
-            <div className="flex gap-8 overflow-x-auto pb-4">
-              {/* ROUND 1 COLUMN */}
-              <div className="min-w-[300px]">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="bg-rl-primary h-2 w-2 rounded-full"></div>
-                  <h3 className="text-white font-bold uppercase tracking-wider text-sm">
-                    Round 1
-                  </h3>
-                </div>
-
-                <div className="space-y-6">
-                  {matches.length === 0 ? (
-                    <div className="text-gray-500">Generating Bracket...</div>
-                  ) : (
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    matches.map((match: any) => (
+            <div className="flex gap-8 pb-4">
+              {Object.keys(rounds).map((roundNum) => (
+                <div key={roundNum} className="min-w-[320px]">
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="bg-rl-primary h-2 w-2 rounded-full"></div>
+                    <h3 className="text-white font-bold uppercase tracking-wider text-sm">
+                      Round {roundNum}
+                    </h3>
+                  </div>
+                  <div className="space-y-6">
+                    {rounds[roundNum].map((match: any) => (
                       <div
                         key={match.id}
-                        className="bg-slate-800 border border-slate-600 rounded-lg overflow-hidden relative shadow-lg"
+                        className={`bg-slate-800 border ${
+                          match.status === "completed"
+                            ? "border-green-600/50"
+                            : "border-slate-600"
+                        } rounded-lg overflow-hidden relative shadow-lg`}
                       >
-                        {/* Left Accent Bar */}
-                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-rl-primary to-rl-accent"></div>
+                        <div
+                          className={`absolute left-0 top-0 bottom-0 w-1 ${
+                            match.status === "completed"
+                              ? "bg-green-500"
+                              : "bg-gradient-to-b from-rl-primary to-rl-accent"
+                          }`}
+                        ></div>
 
-                        {/* Player 1 Row */}
-                        <div className="flex justify-between items-center p-3 border-b border-slate-700 bg-slate-900/40">
-                          <span className="font-bold text-gray-200">
+                        {/* Player 1 */}
+                        <div
+                          className={`flex justify-between items-center p-3 border-b border-slate-700 ${
+                            match.winner_id === match.player1_id
+                              ? "bg-green-900/20"
+                              : "bg-slate-900/40"
+                          }`}
+                        >
+                          <span
+                            className={`font-bold ${
+                              match.winner_id === match.player1_id
+                                ? "text-green-400"
+                                : "text-gray-200"
+                            }`}
+                          >
                             {match.p1?.username || "Bye"}
                           </span>
-                          <input
-                            type="number"
-                            disabled={!isAdmin}
-                            className="bg-black/50 w-8 text-center rounded text-sm text-white"
-                            placeholder="-"
-                          />
+                          {match.status === "completed" ? (
+                            <span className="font-bold text-white">
+                              {match.score_p1}
+                            </span>
+                          ) : (
+                            <input
+                              type="number"
+                              min="0"
+                              disabled={!isAdmin}
+                              className="bg-black/50 w-12 text-center rounded text-sm text-white p-1"
+                              placeholder="-"
+                              value={scoreInputs[match.id]?.p1 ?? ""}
+                              onChange={(e) =>
+                                handleScoreChange(
+                                  match.id,
+                                  "p1",
+                                  e.target.value
+                                )
+                              }
+                            />
+                          )}
                         </div>
 
-                        {/* Player 2 Row */}
-                        <div className="flex justify-between items-center p-3 bg-slate-900/40">
-                          <span className="font-bold text-gray-200">
+                        {/* Player 2 */}
+                        <div
+                          className={`flex justify-between items-center p-3 ${
+                            match.winner_id === match.player2_id
+                              ? "bg-green-900/20"
+                              : "bg-slate-900/40"
+                          }`}
+                        >
+                          <span
+                            className={`font-bold ${
+                              match.winner_id === match.player2_id
+                                ? "text-green-400"
+                                : "text-gray-200"
+                            }`}
+                          >
                             {match.p2?.username || "Bye"}
                           </span>
-                          <input
-                            type="number"
-                            disabled={!isAdmin}
-                            className="bg-black/50 w-8 text-center rounded text-sm text-white"
-                            placeholder="-"
-                          />
+                          {match.status === "completed" ? (
+                            <span className="font-bold text-white">
+                              {match.score_p2}
+                            </span>
+                          ) : (
+                            <input
+                              type="number"
+                              min="0"
+                              disabled={!isAdmin}
+                              className="bg-black/50 w-12 text-center rounded text-sm text-white p-1"
+                              placeholder="-"
+                              value={scoreInputs[match.id]?.p2 ?? ""}
+                              onChange={(e) =>
+                                handleScoreChange(
+                                  match.id,
+                                  "p2",
+                                  e.target.value
+                                )
+                              }
+                            />
+                          )}
                         </div>
 
-                        {isAdmin && (
-                          <div className="bg-slate-950 p-1 flex justify-center">
-                            <button className="text-[10px] uppercase font-bold text-green-500 hover:text-green-400">
-                              Save Score
+                        {/* Actions */}
+                        {isAdmin && match.status !== "completed" && (
+                          <div className="bg-slate-950 p-2 flex justify-center">
+                            <button
+                              onClick={() => saveScore(match)}
+                              className="flex items-center gap-1 text-[10px] uppercase font-bold text-green-500 hover:text-green-400 transition"
+                            >
+                              <Save size={12} /> Save & End Match
                             </button>
                           </div>
                         )}
                       </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              {/* Placeholder: ROUND 2 */}
-              <div className="min-w-[300px] opacity-40">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="bg-gray-600 h-2 w-2 rounded-full"></div>
-                  <h3 className="text-gray-400 font-bold uppercase tracking-wider text-sm">
-                    Semi Finals
-                  </h3>
-                </div>
-                <div className="space-y-12 mt-8 px-4 border-l-2 border-slate-700 h-full">
-                  <div className="bg-slate-800/50 border border-dashed border-slate-700 h-24 rounded-lg flex items-center justify-center text-xs text-gray-600">
-                    Winner 1 vs Winner 2
+                    ))}
                   </div>
                 </div>
-              </div>
+              ))}
+
+              {/* Placeholder for Next Round if not generated yet */}
+              {tournament.status !== "completed" && (
+                <div className="min-w-[300px] opacity-30 flex items-center justify-center border-l-2 border-slate-800">
+                  <div className="text-gray-500 uppercase font-bold tracking-widest -rotate-90">
+                    Next Round Pending
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
